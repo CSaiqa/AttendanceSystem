@@ -1,0 +1,118 @@
+import cv2
+import pickle
+import mysql.connector
+import numpy as np
+import time 
+
+# Load the trained KNN model from file
+with open('knn_model.pkl', 'rb') as f:
+    knn_model = pickle.load(f)
+
+# Set up MySQL connection
+conn = mysql.connector.connect(
+    host="localhost",
+    user="Cse299",
+    password="12345",
+    database="attendance_system"
+)
+cursor = conn.cursor()
+
+
+from datetime import datetime, timedelta
+
+def log_attendance(student_id):
+    # Define the time window (e.g., last 5 minutes)
+    recent_time = datetime.now() - timedelta(minutes=5)
+
+    # Query the database to check if a recent attendance record exists
+    query = "SELECT COUNT(*) FROM Attendance WHERE student_id = %s AND timestamp > %s"
+    cursor.execute(query, (student_id, recent_time))
+    result = cursor.fetchone()
+
+    # If there's a recent entry, skip logging
+    if result[0] > 0:
+        print(f"Skipping logging for student ID {student_id} - recent attendance already recorded.")
+        return  # Exit the function without logging
+
+    # Log attendance in the database if no recent entry is found
+    query = "INSERT INTO Attendance (student_id) VALUES (%s)"
+    cursor.execute(query, (student_id,))
+    conn.commit()
+    print(f"Attendance logged for student ID: {student_id}")
+
+
+
+
+# Function to retrieve student_id from Students table based on name
+def get_student_id_by_name(name):
+    name = str(name)  # Ensure name is a Python string
+    query = "SELECT student_id FROM Students WHERE name = %s"
+    cursor.execute(query, (name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Function to retrieve a student's name based on student_id
+def get_student_name(student_id):
+    student_id = str(student_id)
+    query = "SELECT name FROM Students WHERE student_id = %s"
+    cursor.execute(query, (student_id,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Function for face recognition and attendance logging
+def recognize_faces():
+    cam = cv2.VideoCapture(0)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+    if not cam.isOpened():
+        print("Error: Could not access the webcam.")
+        return
+
+    while True:
+        ret, frame = cam.read()
+        if not ret:
+            print("Error: Failed to capture an image from the webcam.")
+            break
+
+        # Detect faces in the frame
+        faces = face_cascade.detectMultiScale(frame, 1.3, 5)
+        for (x, y, w, h) in faces:
+            face = frame[y:y + h, x:x + w]
+            face_resized = cv2.resize(face, (100, 100)).flatten()
+
+            # Predict the student's name using the loaded KNN model
+            recognized_name = knn_model.predict([face_resized])[0]
+            recognized_name = str(recognized_name)
+
+            # Query database to get student_id for the recognized name
+            recognized_student_id = get_student_id_by_name(recognized_name)
+            if not recognized_student_id:
+                print(f"Error: Student name {recognized_name} not found in database.")
+                continue  # Skip if name is not found in Students table
+
+            # Log attendance for the recognized student
+            log_attendance(recognized_student_id)
+
+            # Display both student ID and name on the frame
+            label = f"{recognized_student_id} - {recognized_name}"
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        cv2.imshow('Face Recognition', frame)
+
+        # Exit if 'q' is pressed
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cam.release()
+    cv2.destroyAllWindows()
+
+# Main execution for face recognition and attendance logging
+if __name__ == "__main__":
+    print("Starting face recognition for attendance logging...")
+    recognize_faces()
+
+# Close the database connection
+conn.close()
+
+
